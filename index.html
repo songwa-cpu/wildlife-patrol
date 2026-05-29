@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <meta name="theme-color" content="#1b5e20">
 <title>Patrol — Wildlife Record v3</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <style>
 :root {
   --g1:#1b5e20; --g2:#2e7d32; --g3:#43a047; --g4:#c8e6c9; --g5:#f1f8e9;
@@ -198,6 +199,28 @@ main{flex:1;overflow-y:auto;overflow-x:hidden;-webkit-overflow-scrolling:touch}
 .confirm-cancel{background:#eceff1;color:#555}
 
 input[type=file]{display:none}
+
+/* ══ PATROL TRACKING ══ */
+.patrol-bar{background:#fff;border-radius:var(--r);padding:12px 14px;margin-bottom:14px;box-shadow:var(--shadow);display:flex;align-items:center;gap:10px}
+.btn-patrol{border:none;border-radius:10px;padding:10px 16px;font-size:.85rem;font-weight:700;cursor:pointer;display:flex;align-items:center;gap:6px;flex:1;justify-content:center}
+.btn-patrol.start{background:var(--g2);color:#fff}
+.btn-patrol.stop{background:var(--red);color:#fff;animation:pulse-rec 1.5s infinite}
+.patrol-status{font-size:.75rem;color:#888;text-align:center;flex-shrink:0}
+.patrol-status.active{color:var(--g2);font-weight:700}
+
+/* ══ MAP SCREEN ══ */
+.screen-map{padding:0!important;display:none;flex-direction:column;height:calc(100vh - 100px)}
+.screen-map.active{display:flex}
+.map-toolbar{display:flex;align-items:center;gap:8px;padding:10px 14px;background:#fff;border-bottom:1px solid #e0e0e0;flex-shrink:0}
+.map-toolbar h2{flex:1;font-size:1rem;font-weight:700;color:var(--g1);margin:0}
+.btn-map-action{background:var(--g5);border:2px solid var(--g3);border-radius:8px;padding:6px 12px;font-size:.78rem;font-weight:700;cursor:pointer;color:var(--g1);white-space:nowrap}
+.btn-map-action.active{background:var(--g2);color:#fff;border-color:var(--g2)}
+#patrolMap{flex:1;min-height:0;z-index:1}
+.map-legend{display:flex;gap:10px;padding:8px 14px;background:#fff;border-top:1px solid #e0e0e0;flex-shrink:0;flex-wrap:wrap}
+.legend-item{display:flex;align-items:center;gap:4px;font-size:.7rem;font-weight:600;color:#555}
+.legend-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0}
+.map-empty{flex:1;display:flex;align-items:center;justify-content:center;text-align:center;color:#aaa;padding:40px}
+.map-empty .big{font-size:4rem;margin-bottom:10px}
 </style>
 </head>
 <body>
@@ -221,6 +244,13 @@ input[type=file]{display:none}
 
   <!-- ══════ SCREEN 1: ANIMAL SELECTION ══════ -->
   <div class="screen active" id="screen-select">
+    <div class="patrol-bar">
+      <button class="btn-patrol start" id="btnPatrol" onclick="togglePatrol()">
+        <span id="patrolIcon">▶️</span>
+        <span id="patrolLabel">Start Patrol</span>
+      </button>
+      <div class="patrol-status" id="patrolStatus">Not tracking</div>
+    </div>
     <div class="screen-title">
       👇 <span>Tap the animal you saw</span>
       <span class="hint"></span>
@@ -307,12 +337,31 @@ input[type=file]{display:none}
     <div style="height:64px"></div>
   </div>
 
+  <!-- ══════ SCREEN 4: MAP ══════ -->
+  <div class="screen-map" id="screen-map">
+    <div class="map-toolbar">
+      <h2>🗺️ Sightings Map</h2>
+      <button class="btn-map-action" id="btnShowTrack" onclick="toggleTrackLayer()">📍 Track</button>
+      <button class="btn-map-action" onclick="fitMapBounds()">🔍 Fit all</button>
+    </div>
+    <div id="patrolMap"></div>
+    <div class="map-legend">
+      <div class="legend-item"><div class="legend-dot" style="background:#e65100"></div> Rare/Endangered</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#2e7d32"></div> Other Mammals</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#b71c1c"></div> Threats</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#1565c0;width:20px;height:4px;border-radius:2px"></div> Patrol route</div>
+    </div>
+  </div>
+
 </main>
 
 <!-- Bottom bar -->
 <div class="bottom-bar">
   <button class="records-btn" onclick="openRecords()">
     📋 Records <span class="records-count" id="recCount">0</span>
+  </button>
+  <button class="records-btn" onclick="openMap()">
+    🗺️ Map
   </button>
   <button class="records-btn" onclick="goHome()" id="homeBtn" style="display:none">
     🏠 Home
@@ -352,6 +401,7 @@ input[type=file]{display:none}
 
 <div class="toast" id="toast"></div>
 
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
 // ══════════════════════════════════
 //  ANIMAL DATA
@@ -997,9 +1047,11 @@ function today() { return new Date().toISOString().split("T")[0]; }
 // ══════════════════════════════════
 function openDB() {
   return new Promise((res, rej) => {
-    const req = indexedDB.open("PatrolDBv2", 1);
+    const req = indexedDB.open("PatrolDBv3", 2);
     req.onupgradeneeded = e => {
-      e.target.result.createObjectStore("records", {keyPath:"id"});
+      var d = e.target.result;
+      if (!d.objectStoreNames.contains("records")) d.createObjectStore("records", {keyPath:"id"});
+      if (!d.objectStoreNames.contains("tracks")) d.createObjectStore("tracks", {keyPath:"id"});
     };
     req.onsuccess = e => { db = e.target.result; res(); };
     req.onerror = rej;
@@ -1026,6 +1078,7 @@ function deleteRecordDB(id) {
 // ══════════════════════════════════
 function showScreen(name) {
   document.querySelectorAll(".screen").forEach(s => s.classList.remove("active"));
+  document.querySelector(".screen-map").classList.remove("active");
   document.getElementById("screen-" + name).classList.add("active");
 }
 
@@ -1036,6 +1089,240 @@ function showToast(msg, type = "") {
   t.className = "toast show" + (type ? " " + type : "");
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => t.classList.remove("show"), 2500);
+}
+
+// ══════════════════════════════════
+//  GPS TRACK LOGGING
+// ══════════════════════════════════
+let patrolActive = false;
+let patrolTrack = [];
+let patrolStartTime = null;
+let trackInterval = null;
+let trackWatchId = null;
+
+function togglePatrol() {
+  if (patrolActive) stopPatrol(); else startPatrol();
+}
+
+function startPatrol() {
+  patrolActive = true;
+  patrolTrack = [];
+  patrolStartTime = new Date();
+
+  var btn = document.getElementById("btnPatrol");
+  btn.className = "btn-patrol stop";
+  document.getElementById("patrolIcon").textContent = "⏹";
+  document.getElementById("patrolLabel").textContent = "Stop Patrol";
+  document.getElementById("patrolStatus").className = "patrol-status active";
+  updatePatrolTimer();
+
+  if (gpsLat !== null) {
+    patrolTrack.push({ lat: gpsLat, lng: gpsLng, acc: gpsAcc, t: new Date().toISOString() });
+  }
+
+  trackInterval = setInterval(() => {
+    if (gpsLat !== null) {
+      var last = patrolTrack[patrolTrack.length - 1];
+      if (!last || distMeters(last.lat, last.lng, gpsLat, gpsLng) > 3) {
+        patrolTrack.push({ lat: gpsLat, lng: gpsLng, acc: gpsAcc, t: new Date().toISOString() });
+      }
+    }
+    updatePatrolTimer();
+  }, 10000);
+
+  showToast("Patrol started — tracking your route", "green");
+  if (navigator.vibrate) navigator.vibrate([50, 30, 100]);
+}
+
+async function stopPatrol() {
+  patrolActive = false;
+  clearInterval(trackInterval);
+
+  var btn = document.getElementById("btnPatrol");
+  btn.className = "btn-patrol start";
+  document.getElementById("patrolIcon").textContent = "▶️";
+  document.getElementById("patrolLabel").textContent = "Start Patrol";
+  document.getElementById("patrolStatus").className = "patrol-status";
+  document.getElementById("patrolStatus").textContent = "Not tracking";
+
+  if (patrolTrack.length > 1) {
+    var track = {
+      id: "track_" + patrolStartTime.getTime(),
+      startTime: patrolStartTime.toISOString(),
+      endTime: new Date().toISOString(),
+      points: patrolTrack,
+      distance: calcTrackDistance(patrolTrack)
+    };
+    await saveTrackDB(track);
+    showToast("Patrol saved — " + patrolTrack.length + " points, " + formatDist(track.distance), "green");
+  } else {
+    showToast("Patrol too short to save");
+  }
+
+  patrolTrack = [];
+  patrolStartTime = null;
+}
+
+function updatePatrolTimer() {
+  if (!patrolStartTime) return;
+  var secs = Math.floor((Date.now() - patrolStartTime.getTime()) / 1000);
+  var h = Math.floor(secs / 3600);
+  var m = Math.floor((secs % 3600) / 60);
+  var s = secs % 60;
+  var time = h > 0 ? h + ":" + String(m).padStart(2, "0") + ":" + String(s).padStart(2, "0")
+    : m + ":" + String(s).padStart(2, "0");
+  document.getElementById("patrolStatus").textContent = "🟢 " + time + " · " + patrolTrack.length + " pts";
+}
+
+function distMeters(lat1, lng1, lat2, lng2) {
+  var R = 6371000;
+  var dLat = (lat2 - lat1) * Math.PI / 180;
+  var dLng = (lng2 - lng1) * Math.PI / 180;
+  var a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLng / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function calcTrackDistance(pts) {
+  var d = 0;
+  for (var i = 1; i < pts.length; i++) d += distMeters(pts[i - 1].lat, pts[i - 1].lng, pts[i].lat, pts[i].lng);
+  return d;
+}
+
+function formatDist(m) {
+  return m >= 1000 ? (m / 1000).toFixed(1) + " km" : Math.round(m) + " m";
+}
+
+// ══════════════════════════════════
+//  MAP
+// ══════════════════════════════════
+let map = null;
+let sightingMarkers = [];
+let trackLayers = [];
+let showTracks = true;
+
+async function openMap() {
+  showScreen("map");
+  document.getElementById("homeBtn").style.display = "flex";
+  document.getElementById("mainScroll").scrollTop = 0;
+
+  await initMap();
+  await loadMapData();
+  setTimeout(() => { if (map) map.invalidateSize(); }, 200);
+}
+
+async function initMap() {
+  if (map) { map.invalidateSize(); return; }
+
+  var startLat = gpsLat || 5.5;
+  var startLng = gpsLng || -3.5;
+
+  map = L.map("patrolMap", { zoomControl: true, attributionControl: false }).setView([startLat, startLng], 14);
+  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    maxZoom: 19
+  }).addTo(map);
+
+  if (gpsLat !== null) {
+    L.circleMarker([gpsLat, gpsLng], {
+      radius: 8, fillColor: "#1565c0", fillOpacity: 0.9, color: "#fff", weight: 2
+    }).addTo(map).bindPopup("📍 You are here");
+  }
+}
+
+async function loadMapData() {
+  if (!map) return;
+
+  sightingMarkers.forEach(m => map.removeLayer(m));
+  sightingMarkers = [];
+  trackLayers.forEach(l => map.removeLayer(l));
+  trackLayers = [];
+
+  var records = await getAllRecords();
+  var catColors = {
+    "Rare & Endangered": "#e65100",
+    "Other Mammals": "#2e7d32",
+    "Poaching": "#b71c1c",
+    "Lumber": "#e65100",
+    "Conflict": "#0d47a1"
+  };
+
+  records.forEach(function (r) {
+    if (!r.lat || !r.lng) return;
+    var color = catColors[r.category] || "#333";
+    var marker = L.circleMarker([r.lat, r.lng], {
+      radius: 10, fillColor: color, fillOpacity: 0.85, color: "#fff", weight: 2
+    }).addTo(map);
+
+    var popup = "<b>" + r.animalEmoji + " " + r.animalName + "</b><br>" +
+      r.date + " " + r.time + "<br>" +
+      (r.countSeen ? "👁️ " + r.countSeen + " seen " : "") +
+      (r.countHeard ? "👂 " + r.countHeard + " heard" : "") +
+      "<br><small>" + r.lat.toFixed(5) + ", " + r.lng.toFixed(5) + "</small>";
+    marker.bindPopup(popup);
+    sightingMarkers.push(marker);
+  });
+
+  var tracks = await getAllTracks();
+  tracks.forEach(function (t) {
+    if (!t.points || t.points.length < 2) return;
+    var latlngs = t.points.map(function (p) { return [p.lat, p.lng]; });
+    var line = L.polyline(latlngs, { color: "#1565c0", weight: 3, opacity: 0.7, dashArray: "8,6" });
+    if (showTracks) line.addTo(map);
+
+    var startDate = new Date(t.startTime);
+    var popupText = "🥾 Patrol<br>" +
+      startDate.toLocaleDateString() + " " + startDate.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) +
+      "<br>" + t.points.length + " points · " + formatDist(t.distance);
+    line.bindPopup(popupText);
+    trackLayers.push(line);
+
+    var startPt = L.circleMarker(latlngs[0], { radius: 5, fillColor: "#4caf50", fillOpacity: 1, color: "#fff", weight: 2 });
+    var endPt = L.circleMarker(latlngs[latlngs.length - 1], { radius: 5, fillColor: "#f44336", fillOpacity: 1, color: "#fff", weight: 2 });
+    startPt.bindPopup("🟢 Patrol start");
+    endPt.bindPopup("🔴 Patrol end");
+    if (showTracks) { startPt.addTo(map); endPt.addTo(map); }
+    trackLayers.push(startPt, endPt);
+  });
+
+  fitMapBounds();
+}
+
+function toggleTrackLayer() {
+  showTracks = !showTracks;
+  var btn = document.getElementById("btnShowTrack");
+  btn.className = showTracks ? "btn-map-action active" : "btn-map-action";
+  trackLayers.forEach(function (l) {
+    if (showTracks) l.addTo(map); else map.removeLayer(l);
+  });
+}
+
+function fitMapBounds() {
+  if (!map) return;
+  var all = [];
+  sightingMarkers.forEach(function (m) { all.push(m.getLatLng()); });
+  trackLayers.forEach(function (l) {
+    if (l.getLatLngs) l.getLatLngs().forEach(function (ll) { all.push(ll); });
+    else if (l.getLatLng) all.push(l.getLatLng());
+  });
+  if (gpsLat !== null) all.push(L.latLng(gpsLat, gpsLng));
+  if (all.length > 0) {
+    map.fitBounds(L.latLngBounds(all).pad(0.1));
+  }
+}
+
+// ══════════════════════════════════
+//  DB — TRACKS STORE
+// ══════════════════════════════════
+function getAllTracks() {
+  return new Promise(function (res) {
+    if (!db.objectStoreNames.contains("tracks")) { res([]); return; }
+    db.transaction("tracks", "readonly").objectStore("tracks").getAll().onsuccess = function (e) { res(e.target.result); };
+  });
+}
+function saveTrackDB(t) {
+  return new Promise(function (res) {
+    if (!db.objectStoreNames.contains("tracks")) { res(); return; }
+    db.transaction("tracks", "readwrite").objectStore("tracks").put(t).onsuccess = res;
+  });
 }
 </script>
 </body>
