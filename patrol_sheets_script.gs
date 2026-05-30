@@ -30,8 +30,17 @@ function doPost(e) {
     var ss = SpreadsheetApp.openById(SHEET_ID);
     var results = [];
 
-    records.forEach(function(record) {
+    // Separate tracks from sightings
+    var tracks = records.filter(function(r) { return r._type === "track"; });
+    var sightings = records.filter(function(r) { return r._type !== "track"; });
+
+    sightings.forEach(function(record) {
       var result = appendRecord(ss, record);
+      results.push(result);
+    });
+
+    tracks.forEach(function(track) {
+      var result = appendTrack(ss, track);
       results.push(result);
     });
 
@@ -174,6 +183,90 @@ function findExisting(sheet, recordId) {
   if (lastRow < 3) return false;
   var ids = sheet.getRange(3, 1, lastRow - 2, 1).getValues();
   return ids.some(function(r) { return r[0] === recordId; });
+}
+
+// ================================================================
+//  APPEND PATROL TRACK to "Patrol Tracks" sheet
+// ================================================================
+var TRACK_HEADERS = [
+  "Track ID", "Start Time", "End Time", "Duration (min)",
+  "Points", "Distance (m)", "Start Lat", "Start Lng",
+  "End Lat", "End Lng", "Synced At"
+];
+
+function appendTrack(ss, track) {
+  var sheetName = "Patrol Tracks";
+  var sheet = ss.getSheetByName(sheetName);
+
+  if (!sheet) {
+    sheet = ss.insertSheet(sheetName);
+    setupTrackHeaders(sheet);
+  }
+
+  // Check for duplicate
+  var existing = findExistingTrack(sheet, track.id);
+  if (existing) return { id: track.id, status: "duplicate_skipped" };
+
+  var startDate = new Date(track.startTime);
+  var endDate = new Date(track.endTime);
+  var durationMin = Math.round((endDate - startDate) / 60000);
+
+  var row = [
+    track.id,
+    track.startTime,
+    track.endTime,
+    durationMin,
+    track.pointCount || 0,
+    track.distance || 0,
+    track.startLat || "",
+    track.startLng || "",
+    track.endLat || "",
+    track.endLng || "",
+    new Date().toISOString()
+  ];
+
+  sheet.appendRow(row);
+
+  var lastRow = sheet.getLastRow();
+  sheet.getRange(lastRow, 1, 1, TRACK_HEADERS.length).setBackground("#e8f5e9");
+  sheet.setRowHeight(lastRow, 24);
+
+  // Bold the distance
+  sheet.getRange(lastRow, 6).setFontWeight("bold");
+
+  return { id: track.id, status: "saved", sheet: sheetName, row: lastRow };
+}
+
+function setupTrackHeaders(sheet) {
+  sheet.getRange(1, 1, 1, TRACK_HEADERS.length).merge();
+  var titleCell = sheet.getRange(1, 1);
+  titleCell.setValue("🥾 Patrol Tracks");
+  titleCell.setBackground("#0d47a1");
+  titleCell.setFontColor("#ffffff");
+  titleCell.setFontWeight("bold");
+  titleCell.setFontSize(13);
+  titleCell.setHorizontalAlignment("center");
+  sheet.setRowHeight(1, 36);
+
+  var headerRange = sheet.getRange(2, 1, 1, TRACK_HEADERS.length);
+  headerRange.setValues([TRACK_HEADERS]);
+  headerRange.setBackground("#1565c0");
+  headerRange.setFontColor("#ffffff");
+  headerRange.setFontWeight("bold");
+  headerRange.setFontSize(10);
+  sheet.setRowHeight(2, 28);
+  sheet.setFrozenRows(2);
+
+  var widths = [180, 160, 160, 90, 70, 100, 100, 100, 100, 100, 160];
+  widths.forEach(function(w, i) { sheet.setColumnWidth(i + 1, w); });
+}
+
+function findExistingTrack(sheet, trackId) {
+  if (!trackId) return false;
+  var lastRow = sheet.getLastRow();
+  if (lastRow < 3) return false;
+  var ids = sheet.getRange(3, 1, lastRow - 2, 1).getValues();
+  return ids.some(function(r) { return r[0] === trackId; });
 }
 
 // ================================================================

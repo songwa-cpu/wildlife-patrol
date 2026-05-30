@@ -343,6 +343,7 @@ input[type=file]{display:none}
       <h2>🗺️ Sightings Map</h2>
       <button class="btn-map-action" id="btnShowTrack" onclick="toggleTrackLayer()">📍 Track</button>
       <button class="btn-map-action" onclick="fitMapBounds()">🔍 Fit all</button>
+      <button class="btn-map-action" onclick="exportGPX()">⬇ GPX</button>
     </div>
     <div id="patrolMap"></div>
     <div class="map-legend">
@@ -620,7 +621,7 @@ window.addEventListener("load", async () => {
   // Auto-sync when coming back online
   window.addEventListener("online", () => {
     checkAndShowSyncBanner();
-    if (getSyncUrl()) syncPending();
+    if (getSyncUrl()) { syncPending(); syncTracks(); }
   });
 });
 
@@ -1155,6 +1156,7 @@ async function stopPatrol() {
     };
     await saveTrackDB(track);
     showToast("Patrol saved — " + patrolTrack.length + " points, " + formatDist(track.distance), "green");
+    if (navigator.onLine && getSyncUrl()) syncTracks();
   } else {
     showToast("Patrol too short to save");
   }
@@ -1306,6 +1308,96 @@ function fitMapBounds() {
   if (gpsLat !== null) all.push(L.latLng(gpsLat, gpsLng));
   if (all.length > 0) {
     map.fitBounds(L.latLngBounds(all).pad(0.1));
+  }
+}
+
+// ══════════════════════════════════
+//  GPX EXPORT
+// ══════════════════════════════════
+async function exportGPX() {
+  var tracks = await getAllTracks();
+  var records = await getAllRecords();
+
+  if (!tracks.length && !records.filter(r => r.lat).length) {
+    showToast("No GPS data to export"); return;
+  }
+
+  var gpx = '<?xml version="1.0" encoding="UTF-8"?>\n' +
+    '<gpx version="1.1" creator="WildlifePatrol" xmlns="http://www.topografix.com/GPX/1/1">\n' +
+    '  <metadata><name>Wildlife Patrol Export ' + today() + '</name></metadata>\n';
+
+  // Sightings as waypoints
+  records.forEach(function(r) {
+    if (!r.lat || !r.lng) return;
+    gpx += '  <wpt lat="' + r.lat + '" lon="' + r.lng + '">\n' +
+      '    <name>' + r.animalEmoji + ' ' + r.animalName + '</name>\n' +
+      '    <desc>' + r.category + ' | Seen: ' + (r.countSeen||0) + ' Heard: ' + (r.countHeard||0) + ' | ' + r.date + ' ' + r.time + '</desc>\n' +
+      '    <time>' + r.savedAt + '</time>\n' +
+      '    <type>' + r.category + '</type>\n' +
+      '  </wpt>\n';
+  });
+
+  // Patrol routes as tracks
+  tracks.forEach(function(t) {
+    gpx += '  <trk>\n' +
+      '    <name>Patrol ' + new Date(t.startTime).toLocaleDateString() + ' (' + formatDist(t.distance) + ')</name>\n' +
+      '    <trkseg>\n';
+    t.points.forEach(function(p) {
+      gpx += '      <trkpt lat="' + p.lat + '" lon="' + p.lng + '"><time>' + p.t + '</time></trkpt>\n';
+    });
+    gpx += '    </trkseg>\n  </trk>\n';
+  });
+
+  gpx += '</gpx>';
+  dl("patrol_" + today() + ".gpx", "application/gpx+xml", gpx);
+  showToast("GPX exported — open in Google Earth or QGIS", "green");
+}
+
+// ══════════════════════════════════
+//  SYNC TRACKS TO SHEETS
+// ══════════════════════════════════
+async function syncTracks() {
+  var url = getSyncUrl();
+  if (!url || !navigator.onLine) return;
+
+  var tracks = await getAllTracks();
+  var pending = tracks.filter(function(t) { return !t.syncStatus || t.syncStatus === "pending"; });
+  if (!pending.length) return;
+
+  try {
+    var payload = pending.map(function(t) {
+      return {
+        _type: "track",
+        id: t.id,
+        startTime: t.startTime,
+        endTime: t.endTime,
+        pointCount: t.points.length,
+        distance: Math.round(t.distance),
+        startLat: t.points[0].lat,
+        startLng: t.points[0].lng,
+        endLat: t.points[t.points.length-1].lat,
+        endLng: t.points[t.points.length-1].lng
+      };
+    });
+
+    var resp = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain" },
+      body: JSON.stringify(payload),
+      redirect: "follow"
+    });
+    if (!resp.ok) throw new Error("HTTP " + resp.status);
+    var text = await resp.text();
+    var json = JSON.parse(text);
+
+    if (json.success) {
+      for (var t of pending) {
+        t.syncStatus = "synced";
+        await saveTrackDB(t);
+      }
+    }
+  } catch(e) {
+    console.error("Track sync error:", e);
   }
 }
 
